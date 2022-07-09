@@ -1,0 +1,47 @@
+# List of git repos to pull from
+git_repos:
+  - name: Example1
+    url: https://github.com/Example1/rules
+    branch: master
+    sub_dirs: true
+    root_dir: false
+    include_dirs: []
+    exclude_dirs:
+      - deprecated
+    prepend_ruleset: true
+    metadata:
+      license: GNU-GPLv2
+      source_repo: https://github.com/Example1/rules
+  - name: Example2
+    url: https://github.com/Example2/yara-rules
+    branch: master
+    sub_dirs: true
+    root_dir: true
+    include_dirs: []
+    exclude_dirs: []
+    prepend_ruleset: true
+    metadata:
+      license: MIT
+      source_repo: https://github.com/Example2/yara-rules
+
+# Spaces for indenting
+indent: 4
+
+# Valid yara rule extensions
+valid_ext:
+  - .yara
+  - .yar
+
+# Path to locally store git_repos and resulting combined rules
+rule_path: rules/
+
+# Path to modification configs
+configs:
+  modify: etc/modify.conf
+  disable: etc/disable.conf
+
+# Delete raw rules
+cleanup_raw_rules: true
+
+# Whether to save the non-compiled version of the yara files
+keep_uncompiled: false

@@ -1,0 +1,45 @@
+[build-system]
+requires = ["poetry_core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "yara_compendium"
+description = "Yara rule aggregation and modification tool"
+version = "0.1.0"
+authors = ["keiche <keiche@users.noreply.github.com>"]
+license = "MIT"
+readme = "README.md"
+include = [
+    "etc/config.yml",
+    "etc/disable.conf",
+    "etc/modify.conf",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[tool.poetry.dependencies]
+GitPython = "*"
+plyara = "^2.1.1"
+PyYAML = "*"
+yara-python = "^4.2.0"
+
+[tool.poetry.scripts]
+yara_compendium = "yara_compendium:main"
+
+[tool.black]
+line-length = 100
+target-version = ["py38", "py39", "py310"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.venv
+)/
+'''
