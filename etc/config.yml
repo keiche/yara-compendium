@@ -8,7 +8,6 @@ git_repos:
     include_dirs: []
     exclude_dirs:
       - deprecated
-    prepend_ruleset: true
     metadata:
       license: GNU-GPLv2
       source_repo: https://github.com/Example1/rules
@@ -19,7 +18,6 @@ git_repos:
     root_dir: true
     include_dirs: []
     exclude_dirs: []
-    prepend_ruleset: true
     metadata:
       license: MIT
       source_repo: https://github.com/Example2/yara-rules

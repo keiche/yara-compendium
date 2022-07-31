@@ -8,202 +8,23 @@ import os
 import os.path
 import re
 import shutil
-import sys
 from copy import deepcopy
 from datetime import datetime
 from typing import Dict, List
 
 # 3rd party libraries
-import plyara
 import yara
 from git import Repo
 from yaml import safe_load
 
-logger = logging.getLogger("yara_compendium")
+# Custom libraries
+from compendium.config import rule_map
+from compendium.objects import Alterations, YaraFile
+
+logger = logging.getLogger(__package__)
 logging.getLogger("plyara.core").setLevel(logging.WARNING)
 
 # pylint: disable=c-extension-no-member, unspecified-encoding
-
-
-class Alterations:
-    def __init__(self, mod_path, disable_path):
-        """
-        Logic for editing Yara rules
-        :param mod_path: Path to modify.conf
-        :param disable_path: Path to disable.conf
-        """
-        self.modify = self._parse_modify(mod_path)
-        self.disable = self._parse_disable(disable_path)
-
-    @staticmethod
-    def _parse_modify(path: str) -> Dict:
-        """
-        Gather the "modify" logic
-        :param path: Path to modify.conf
-        :return: Rule name (key) with the find/replace logic
-        """
-        modify = {}
-        mod_line_re = re.compile(
-            r"^(?P<rule>[a-zA-Z0-9_]+) \"(?P<find>[^\"]+(?=\" \"))\" \"(?P<repl>[^\"]+(?=\"$))\"$"
-        )
-        with open(path, "r") as f:
-            for line in f:
-                if line.startswith("#"):
-                    continue
-                if m := mod_line_re.match(line):
-                    modify[m.group("rule")] = {"find": m.group("find"), "replace": m.group("repl")}
-        return modify
-
-    @staticmethod
-    def _parse_disable(path: str) -> List:
-        """
-        Gather the "disable" rule list
-        :param path: Path to disable.conf
-        :return: Yara rules to disable
-        """
-        disable = []
-        with open(path, "r") as f:
-            for line in f:
-                if line.startswith("#"):
-                    continue
-                disable.append(line.rstrip())
-        return disable
-
-
-class YaraFile:
-    def __init__(
-        self,
-        yara_file: str,
-        alterations: Alterations,
-        indent=4,
-        ruleset_name=None,
-        prepend_ruleset=False,
-    ) -> None:
-        """
-        Yara rule file
-        :param yara_file: Rule file path
-        :param alterations: Modify/disable alterations
-        :param indent: Number of spaces to use as indents
-        :param ruleset_name: Ruleset name
-        :param prepend_ruleset: Whether to prepend the ruleset name to each rule
-        """
-        # File name
-        self.filename = os.path.basename(yara_file)
-        self.indent = indent
-
-        # Alterations
-        self.alterations = alterations
-
-        # Ruleset name
-        self.ruleset_name = re.sub(r"[^a-zA-Z0-9]", "_", ruleset_name).lower() + "__"
-        self.prepend_ruleset = prepend_ruleset
-        self.prev_rule_names = {}
-
-        # Rules
-        parser = plyara.Plyara()
-        with open(yara_file, "r") as f:
-            self.rules = parser.parse_string(f.read())
-
-    def add_meta(self, meta: Dict) -> None:
-        """
-        Add metadata to each rule. Will overwrite if the metadata field already exists
-        :param meta: Metadata fields and values to add
-        """
-        for i, _ in enumerate(self.rules):
-            if "metadata" not in self.rules[i]:
-                self.rules[i]["metadata"] = []
-            m = [{k: v} for k, v in meta.items()]
-            self.rules[i]["metadata"].extend(m)
-
-    def _get_unique_element(self, element) -> List:
-        """
-        Retrieve the unique elements of a Yara rule
-        :param element: Yara element to retrieve
-        :return: Yara element values
-        """
-        elements = set()
-        for rules in self.rules:
-            for ele in rules.get(element, []):
-                elements.add(ele)
-        return list(elements)
-
-    @property
-    def file_str(self):
-        """
-        Reconstruct the updated Yara file as a string
-        """
-        file_rows = []
-
-        # Gather imports and includes
-        for verb in ["imports", "includes"]:
-            if elements := self._get_unique_element(verb):
-                file_rows.extend([f'{verb.rstrip("s")} "{x}"' for x in elements])
-            # Add blank line between sections
-            if elements:
-                file_rows.append("")
-
-        # Create rules
-        for rule in self.rules:
-            # Modify rule
-            if rule["rule_name"] in self.alterations.modify:
-                find = self.alterations.modify[rule["rule_name"]]["find"]
-                repl = self.alterations.modify[rule["rule_name"]]["replace"]
-                logger.debug("Modifying '%s': '%s' with '%s'", rule["rule_name"], find, repl)
-
-                rule["raw_strings"] = re.sub(rf"{find}", rf"{repl}", rule["raw_strings"])
-                rule["raw_condition"] = re.sub(rf"{find}", rf"{repl}", rule["raw_condition"])
-
-            # Disable rule
-            if rule["rule_name"] in self.alterations.disable:
-                logger.debug("Found rule '%s' and skipping due to disable logic", rule["rule_name"])
-                continue
-
-            # Rule name and tags
-            tags = " ".join(self._get_unique_element("tags"))
-            tags = f" : {tags}" if tags else tags
-            scope = f'{rule.get("scope", "")} ' if rule.get("scope") else ""
-            rule_name = (
-                rule["rule_name"]
-                if not self.prepend_ruleset
-                else f"{self.ruleset_name}{rule['rule_name']}"
-            )
-            file_rows.append(f"{scope}rule {rule_name}{tags}")
-
-            # Map the name change for usage in the condition
-            self.prev_rule_names[rule["rule_name"]] = rule_name
-
-            # Start rule contents
-            file_rows.append("{")
-
-            # Add metadata (may have been altered via add_meta)
-            if "metadata" in rule:
-                file_rows.append(f'{" "*self.indent}meta:')
-                for m in rule["metadata"]:
-                    for k, v in m.items():
-                        if isinstance(v, str):
-                            v = f'"{v}"'
-                        elif isinstance(v, bool):
-                            # Prevent using python syntax for Booleans
-                            v = "true" if v else "false"
-                        file_rows.append(f'{" "*self.indent*2}{k} = {v}')
-                file_rows.append("")
-
-            # Add strings
-            if "raw_strings" in rule:
-                file_rows.append(f'{" "*self.indent}{rule["raw_strings"]}')
-            # Add condition
-            if "raw_condition" in rule:
-                condition = rule["raw_condition"]
-                # If rule names were altered, then update to their new name
-                if self.prepend_ruleset:
-                    for prev, new in self.prev_rule_names.items():
-                        condition = re.sub(rf"\b{prev}\b", new, condition)
-                file_rows.append(f'{" "*self.indent}{condition}')
-            # Finish rule contents
-            file_rows.append("}")
-            file_rows.append("")
-
-        return "\n".join(file_rows)
 
 
 def download_ruleset(url: str, name: str, local_dir: str) -> None:
@@ -227,15 +48,16 @@ def download_ruleset(url: str, name: str, local_dir: str) -> None:
         origin.pull()
 
 
-def compile_rules(rule_paths: List, name: str, out_path: str, keep_uncompiled=True) -> None:
+def compile_rules(rule_paths: List, name: str, out_path: str, keep_uncompiled=True) -> str:
     """
     Create a raw and compiled version of multiple Yara rule files
     :param rule_paths: List of rule paths to combine
     :param name: Rule set name
     :param out_path: Location to write combined rules
     :param keep_uncompiled: Whether to keep the uncompiled rules
+    :return: Raw rule path
     """
-    filename = f'{out_path}/{name.replace(" ", "_")}.yara'
+    filename = os.path.join(out_path, name.replace(" ", "_") + ".yara")
     with open(filename, "w") as fp:
         fp.write(f"// {name}\n// Updated {datetime.utcnow()} UTC\n\n")
         for rp in rule_paths:
@@ -248,17 +70,36 @@ def compile_rules(rule_paths: List, name: str, out_path: str, keep_uncompiled=Tr
     if not keep_uncompiled:
         logger.debug("Deleting uncompiled version: %s", filename)
         os.remove(filename)
+    return filename
 
 
-def validate_yara(rule_path: str) -> bool:
+def validate_yara(rule_str: str, ruleset: str, file_name: str, loop_cnt=0) -> bool:
     """
     Validate the syntax of a yara rule file
-    :param rule_path: Path to yara rule
+    :param rule_str: Rule file as a string
+    :param ruleset: Ruleset name (used for cross-reference resolution)
+    :param file_name: File name (used for debugging)
+    :param loop_cnt: Loop count (prevent infinite looping)
     :return: Valid syntax boolean
     """
     try:
-        yara.compile(rule_path)
-    except yara.SyntaxError:
+        yara.compile(source=rule_str)
+    except yara.SyntaxError as e:
+        # Check if the error is related to an "include" and try to resolve
+        if (
+            m := re.search(r'undefined identifier "(?P<ext_ref>[^"]+)"', str(e))
+        ) is not None and loop_cnt <= 1:
+            ext_ref = m.group("ext_ref")
+            if ext_ref in rule_map.get(ruleset, ""):
+                rule_str = f'include "{rule_map[ruleset][ext_ref]}"\n{rule_str}'
+                logger.debug(
+                    "Adding include file %s to %s and retrying validation", ext_ref, file_name
+                )
+                return validate_yara(rule_str, ruleset, file_name, loop_cnt + 1)
+            else:
+                logger.error("No include file found")
+        logger.warning(rule_str)
+        logger.warning("Error: %s, File: %s", str(e), file_name)
         return False
     return True
 
@@ -290,8 +131,8 @@ def load_config(config_path: str) -> Dict:
                 config[k] = v
 
     if not len(config["git_repos"]) > 0:
-        logger.error("No repos exist in the config")
-        sys.exit(1)
+        logger.error("No git repos exist in the config")
+        raise ValueError("No git repos exist in the config")
 
     logger.debug("Config params: %s", config)
     return config
@@ -344,17 +185,19 @@ def main():
     config = load_config(args.config)
     keep_uncompiled = config.get("keep_uncompiled", True)
 
-    # Setup logging
+    # Set up logging
     logging.basicConfig(
         format="%(asctime)s %(name)s %(levelname)s: %(message)s",
         level=logging.DEBUG if args.verbose else logging.INFO,
     )
 
+    # Create base rules dir
     rules_path = config["rules_path"].rstrip("/")
     local_compendium_dir = "compendium"
-    compendium_dir = f"{rules_path}/{local_compendium_dir}"
+    compendium_dir = os.path.join(rules_path, local_compendium_dir)
     os.makedirs(compendium_dir, exist_ok=True)
 
+    # Set up the alterations class
     alterations = Alterations(
         mod_path=config["configs"]["modify"], disable_path=config["configs"]["disable"]
     )
@@ -382,7 +225,7 @@ def main():
             sub_dirs=ruleset.get("sub_dirs", False),
         ):
             # Loop through each file in the directory
-            for fn in os.listdir(ruleset_path):
+            for fn in sorted(os.listdir(ruleset_path)):
                 fp = os.path.join(ruleset_path, fn)
                 # Validate the file exists and has a valid extension
                 if os.path.isfile(fp) and any(True for x in config["valid_ext"] if fp.endswith(x)):
@@ -391,22 +234,22 @@ def main():
                         alterations=alterations,
                         indent=config.get("indent", 4),
                         ruleset_name=ruleset_name,
-                        prepend_ruleset=ruleset.get("prepend_ruleset", False),
                     )
-                    local_final_rule_path = f"{local_compendium_dir}/{fn}"
-                    final_rule_path = f"{compendium_dir}/{fn}"
+                    local_final_rule_path = os.path.join(local_compendium_dir, fn)
+                    final_rule_path = os.path.join(compendium_dir, fn)
 
                     # Copy Yara files directly to the compendium
+                    rule_str = yf.file_str
                     if "metadata" not in ruleset:
                         shutil.copy(fp, compendium_dir)
                     # Edit the files metadata and then write them to the compendium
                     else:
                         yf.add_meta(ruleset["metadata"])
                         with open(final_rule_path, "w") as wfp:
-                            wfp.write(yf.file_str)
+                            wfp.write(rule_str)
 
                     # Validate syntax
-                    if not validate_yara(final_rule_path):
+                    if not validate_yara(rule_str, ruleset_name, fn):
                         logger.warning("Yara Syntax Error - %s in %s ruleset", fn, ruleset_name)
                         continue
 

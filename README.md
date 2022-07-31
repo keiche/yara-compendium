@@ -10,7 +10,6 @@ Inspired by tools used to manage open source NIDS signatures such as [pulledpork
   * Raw `.yara` and compiled `.yarac`
   * Note: The compiled yara rule can only be used on a system with the same Yara version
 * Add `meta` key-value pairs to each Yara rule
-* Prepend the ruleset name to each Yara rule to help distinguish its source
 * Ability to modify specific rules via regex
 * Ability to disable specific rules via rule name
 
@@ -26,28 +25,31 @@ The script will output several files
 
 # Installation
 
-1. Install OS dependencies (Ubuntu)
-  ```shell
-  apt install gcc git python3 python3-dev libyara8 yara
-  ```
-3. Install Poetry
-  ```shell
-  curl -sSL https://raw.githubusercontent.com/python-poetry/poetry/master/get-poetry.py | python3 -
-  ```
-3. Config Poetry virtual env
-  ```shell
-  poetry update
-  poetry install
-  ```
-3. Validate
-  ```shell
-  poetry run yara_compendium --help
-  ```
+## Virtual environment
+1. Install OS dependencies (Ubuntu 20.04). Install python3-yara and libyara3 here to get the proper linking.
+    ```shell
+    apt install git python3 python3-pip python3-yara libyara3 yara
+    ```
+2. Create and activate virtual environment
+    ```shell
+    python3 -m venv venv
+    source venv/bin/activate
+    ```
+3. Install
+    ```shell
+    pip3 install .
+    ```
+
+## Docker image
+
+```shell
+docker build . -t yara-compendium:latest
+```
 
 # Usage
 
 ```
-usage: yara_compendium.py [-h] [-c CONFIG] [-v]
+usage: yara-compendium [-h] [-c CONFIG] [-v]
 
 Yara Compendium
 
@@ -61,7 +63,7 @@ optional arguments:
 # Configuration Files
 
 ## config.yml
-
+This configuration file has example values and must be edited before usage.
 * `git_repos` (list of dictionaries) - Configuration details for each remote git repository to pull Yara signatures from
   * `name` (str) - Arbitrary string of what to name this repository
   * `url` (str) - Link to the remote git repository
@@ -70,7 +72,6 @@ optional arguments:
   * `root_dir` (Boolean) - Whether to look in the root directory for Yara rules
   * `include_dirs` (list of str)- Specific subdirectories to search for Yara rules
   * `exclude_dirs` (list of str)- Specific subdirectories to exclude searching for Yara rules (requires `sub_dirs` to be `true`)
-  * `prepend_ruleset` (Boolean) - Prepend the `name` to each of the Yara rules to help distinguish the source ruleset
   * `metadata` (dict) - Arbitrary key-value pairs to add to the metadata of each Yara rule
     * If a key already exists, this will overwrite the value 
     * Examples: `license`, `source_repo`, `tags`
@@ -109,21 +110,26 @@ Example
 is_pe
 ```
 
-# Example
-
+# Examples
+Local example
 ```
-$ poetry run yara_compendium -v
-2022-07-08 17:07:04,390 yara_compendium DEBUG: Git repo Example cloned to ./rules/Example
-2022-07-08 17:07:04,395 yara_compendium DEBUG: Directories from rule set './rules/Example' to gather Yara rules: ['./rules/Example/malware', './rules/Example/webshells']
-2022-07-08 17:07:04,592 yara_compendium WARNING: Syntax Error - bad_example.yar in Example ruleset
-2022-07-08 17:07:04,674 yara_compendium INFO: Wrote compiled Yara file: ./rules/Example.yarac
-2022-07-08 17:07:05,023 yara_compendium DEBUG: Git repo Example2 cloned to ./rules/Example2
-2022-07-08 17:07:05,045 yara_compendium DEBUG: Directories from rule set './rules/Example2' to gather Yara rules: ['./rules/Example']
-2022-07-08 17:07:05,100 yara_compendium INFO: Wrote compiled Yara file: ./rules/Example2.yarac
-2022-07-08 17:07:55,258 yara_compendium INFO: Wrote compiled Yara file: ./rules/signatures.yarac
+$ yara-compendium -v
+2022-07-08 17:07:04,390 yara-compendium DEBUG: Git repo Example cloned to ./rules/Example
+2022-07-08 17:07:04,395 yara-compendium DEBUG: Directories from rule set './rules/Example' to gather Yara rules: ['./rules/Example/malware', './rules/Example/webshells']
+2022-07-08 17:07:04,592 yara-compendium WARNING: Syntax Error - bad_example.yar in Example ruleset
+2022-07-08 17:07:04,674 yara-compendium INFO: Wrote compiled Yara file: ./rules/Example.yarac
+2022-07-08 17:07:05,023 yara-compendium DEBUG: Git repo Example2 cloned to ./rules/Example2
+2022-07-08 17:07:05,045 yara-compendium DEBUG: Directories from rule set './rules/Example2' to gather Yara rules: ['./rules/Example']
+2022-07-08 17:07:05,100 yara-compendium INFO: Wrote compiled Yara file: ./rules/Example2.yarac
+2022-07-08 17:07:55,258 yara-compendium INFO: Wrote compiled Yara file: ./rules/signatures.yarac
+```
+
+Docker example
+```
+$ mkdir rules_out
+$ docker run --rm -v $(pwd)/etc:/app/etc -v $(pwd)/rules_out:/app/rules yara-compendium:latest -v
 ```
 
 # Future work
 
-* Allow for rules referenced in different files (`include`) to be understood
 * Allow for regular expressions in the `modify.conf` rule name

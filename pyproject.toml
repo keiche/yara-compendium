@@ -1,18 +1,19 @@
 [build-system]
-requires = ["poetry_core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
 
-[tool.poetry]
-name = "yara_compendium"
-description = "Yara rule aggregation and modification tool"
-version = "0.1.0"
-authors = ["keiche <keiche@users.noreply.github.com>"]
-license = "MIT"
+[project]
+name = "yara-compendium"
+description = "Yara rule aggregation and management tool"
+version = "0.2.0"
+license = {file = "LICENSE"}
 readme = "README.md"
-include = [
-    "etc/config.yml",
-    "etc/disable.conf",
-    "etc/modify.conf",
+requires-python = ">=3.8"
+dependencies = [
+    "GitPython",
+    "plyara~=2.1.1",
+    "PyYAML",
+#    "yara-python~=4.2.0",  # Note: don't install yara-python via pip so it can be properly linked
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -23,14 +24,28 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
-[tool.poetry.dependencies]
-GitPython = "*"
-plyara = "^2.1.1"
-PyYAML = "*"
-yara-python = "^4.2.0"
+[project.scripts]
+yara-compendium = "compendium.main:main"
 
-[tool.poetry.scripts]
-yara_compendium = "yara_compendium:main"
+[project.optional-dependencies]
+tests = [
+    "black",
+    "flake8",
+    "isort",
+    "pylint~=2.14.5",
+    "pytest~=7.1.2",
+    "pytest-cov~=3.0.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["compendium"]
+
+[tool.setuptools.package-data]
+etc = [
+    "etc/config.yml",
+    "etc/disable.conf",
+    "etc/modify.conf",
+]
 
 [tool.black]
 line-length = 100

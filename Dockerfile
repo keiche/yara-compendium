@@ -1,18 +1,18 @@
-FROM ubuntu:22.04
+FROM ubuntu:20.04
 
 WORKDIR /app
 
-ENV PATH="/root/.poetry/bin:${PATH}"
-ENV YARA_VERSION="4.1.3-1build1"
+ENV YARA_VERSION="3.9.0-1"
 
-COPY yara_compendium.py pyproject.toml README.md LICENSE  ./
+# Dependencies
+RUN apt update -y && \
+    apt install git python3 python3-pip python3-yara libyara3 yara=${YARA_VERSION} -y && \
+    pip3 install --upgrade pip build setuptools
+
+# Install app
+COPY pyproject.toml README.md LICENSE  ./
 ADD etc ./etc
+ADD compendium ./compendium
+RUN pip3 install .
 
-RUN apt update -y && apt upgrade -y && \
-    apt install curl gcc git make python3 python3-dev python3-distutils yara=${YARA_VERSION} -y && \
-    curl -sSL https://raw.githubusercontent.com/python-poetry/poetry/master/get-poetry.py | python3 - && \
-    poetry update && \
-    poetry install
-
-ENTRYPOINT ["poetry", "run", "yara_compendium"]
-CMD ["--help"]
+ENTRYPOINT ["yara-compendium"]
