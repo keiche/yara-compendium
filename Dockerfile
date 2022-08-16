@@ -13,6 +13,7 @@ RUN apt update -y && \
 COPY pyproject.toml README.md LICENSE  ./
 ADD etc ./etc
 ADD compendium ./compendium
-RUN pip3 install .
+RUN git config --global --add safe.directory '*' && \
+    pip3 install .
 
 ENTRYPOINT ["yara-compendium"]

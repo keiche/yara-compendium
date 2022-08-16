@@ -1,11 +1,85 @@
 import os
 import shutil
-import stat
 
 import pytest
 import yaml
+from git import Repo
 
-from compendium import main, config
+from compendium.main import parse_args, process_rulesets
+from compendium.objects import CompendiumConfig, RulesetConfig
+
+
+@pytest.fixture()
+def empty_config_file():
+    config_file = ".test_config.yml"
+    with open(config_file, "w") as f:
+        f.write(yaml.safe_dump({}))
+    yield config_file
+
+    # Teardown
+    os.remove(config_file)
+
+
+@pytest.fixture()
+def simple_ruleset_config():
+    return {"name": "foo", "url": "bar"}
+
+
+@pytest.fixture()
+def indent_config_file(simple_ruleset_config):
+    config_file = ".test_config.yml"
+    with open(config_file, "w") as f:
+        f.write(yaml.safe_dump({"indent": 5, "git_repos": [simple_ruleset_config]}))
+    yield config_file
+
+    # Teardown
+    os.remove(config_file)
+
+
+class TestCompendiumConfig:
+    def test_load_config_empty(self, empty_config_file):
+        with pytest.raises(ValueError):
+            CompendiumConfig(empty_config_file)
+
+    def test_load_config_replaces(self, indent_config_file):
+        comp_config = CompendiumConfig(indent_config_file)
+        assert comp_config.indent == 5
+
+
+class TestRulesetConfig:
+    def test_config(self, simple_ruleset_config):
+        rsc = RulesetConfig(simple_ruleset_config)
+        assert rsc.name == "foo"
+        assert rsc.url == "bar"
+
+    def test_empty_config(self, indent_config_file):
+        with pytest.raises(AssertionError):
+            RulesetConfig({})
+
+
+@pytest.fixture()
+def input_args():
+    return ["-c", "foobar", "-v"]
+
+
+@pytest.fixture()
+def input_args_invalid():
+    return ["-x"]
+
+
+class TestParseArgs:
+    def test_parse_args_default(self):
+        args = parse_args([])
+        assert not args.verbose
+
+    def test_parse_args_set(self, input_args):
+        args = parse_args(input_args)
+        assert args.verbose
+        assert args.config == "foobar"
+
+    def test_parse_args_invalid(self, input_args_invalid):
+        with pytest.raises(SystemExit):
+            parse_args(input_args_invalid)
 
 
 @pytest.fixture()
@@ -14,133 +88,61 @@ def ruleset_name():
 
 
 @pytest.fixture()
-def rule_file_name():
-    return "test.rule"
-
-
-@pytest.fixture()
-def local_rules_path():
+def local_test_path():
     return ".mytest"
 
 
 @pytest.fixture()
-def good_yara_str():
-    return "rule test\n{\n  condition:\n    true\n}"
-
-
-def test_validate_yara_good(good_yara_str, ruleset_name, rule_file_name):
-    assert main.validate_yara(good_yara_str, ruleset_name, rule_file_name)
-
-
-@pytest.mark.parametrize(
-    "yara_str", ["invalid", "rule test\n{\n  condition:\n    ext_rule_does_not_exist\n}"]
-)
-def test_validate_yara_bad(yara_str, ruleset_name, rule_file_name):
-    assert not main.validate_yara(yara_str, ruleset_name, rule_file_name)
+def local_rules_path(local_test_path):
+    rules_path = os.path.join(local_test_path, "rules/")
+    os.path.join(local_test_path, "compendium/")
+    os.makedirs(rules_path, exist_ok=True)
+    return rules_path
 
 
 @pytest.fixture()
-def setup_rules_dir(good_yara_str, local_rules_path):
-    # Create compendium rules dir
-    config.rules_path = local_rules_path
-    config.compendium_dir = os.path.join(config.rules_path, "compendium")
-    os.makedirs(config.compendium_dir, exist_ok=True)
-    yara_rule_file = os.path.join(config.compendium_dir, "test.yara")
-    local_yara_rule_file = os.path.join("compendium", "test.yara")
-    # Write yara rule
-    with open(yara_rule_file, "w") as f:
-        f.write(good_yara_str)
-    rule_paths = [local_yara_rule_file]
-    return rule_paths, yara_rule_file
+def good_yara_str():
+    return "rule test\n{\n  condition:\n    true\n}\n"
 
 
-def test_compile_rules_raw_exists(setup_rules_dir, good_yara_str, ruleset_name):
-    # Setup
-    rules_path, yara_rule_file = setup_rules_dir
+def create_git_repo(test_path, ruleset_name, yara_str) -> str:
+    ext_repo_path = os.path.join(test_path, "ext/", ruleset_name)
+    os.makedirs(ext_repo_path, exist_ok=True)
 
-    # Test
-    outfile = main.compile_rules(
-        rule_paths=rules_path, name=ruleset_name, out_path=config.rules_path
-    )
-    assert os.path.isfile(outfile)
-
-    # Cleanup
-    shutil.rmtree(config.rules_path)
-
-
-def test_compile_rules_raw_dne(setup_rules_dir, good_yara_str, ruleset_name):
-    # Setup
-    rules_path, yara_rule_file = setup_rules_dir
-
-    # Test
-    outfile = main.compile_rules(
-        rule_paths=rules_path, name=ruleset_name, out_path=config.rules_path, keep_uncompiled=False
-    )
-    assert not os.path.isfile(outfile)
-
-    # Cleanup
-    shutil.rmtree(config.rules_path)
+    repo = Repo.init(ext_repo_path)
+    yara_rule = os.path.join(ext_repo_path, "test.yara")
+    with open(yara_rule, "w") as f:
+        f.write(yara_str)
+    repo.index.add("test.yara")
+    repo.index.commit("committing yara rule")
+    repo.create_head("master")
+    return ext_repo_path
 
 
-def test_compile_rules_compiled_exists(setup_rules_dir, good_yara_str, ruleset_name):
-    # Setup
-    rules_path, yara_rule_file = setup_rules_dir
+@pytest.fixture()
+def full_config_file(local_test_path, ruleset_name, good_yara_str):
+    # Create git repo
+    ext_repo_path = create_git_repo(local_test_path, ruleset_name, good_yara_str)
 
-    # Test
-    outfile = main.compile_rules(
-        rule_paths=rules_path, name=ruleset_name, out_path=config.rules_path
-    )
-    assert os.path.isfile(outfile + "c")
-
-    # Cleanup
-    shutil.rmtree(config.rules_path)
-
-
-def test_load_config_empty():
-    # Setup
     config_file = ".test_config.yml"
+    ruleset_params = {
+        "name": "testrules",
+        "url": ext_repo_path,
+        "root_dir": True,
+        "metadata": {"foo": "bar", "baz": 123, "qux": True},
+    }
     with open(config_file, "w") as f:
-        f.write(yaml.safe_dump({}))
+        f.write(yaml.safe_dump({"indent": 2, "git_repos": [ruleset_params]}))
+    yield config_file
 
-    # Test
-    with pytest.raises(ValueError):
-        main.load_config(config_file)
-
-    # Cleanup
-    os.remove(config_file)
+    # Teardown
+    shutil.rmtree(local_test_path)
 
 
-def test_load_config_replaces():
-    # Setup
-    config_file = ".test_config.yml"
-    with open(config_file, "w") as f:
-        f.write(yaml.safe_dump({"indent": 5, "git_repos": [1]}))
-
-    # Test
-    config_data = main.load_config(config_file)
-    assert config_data["indent"] == 5
-
-    # Cleanup
-    os.remove(config_file)
-
-
-# https://stackoverflow.com/a/4829285
-def on_rm_error(func, path, exec_info):
-    os.chmod(path, stat.S_IWRITE)
-    os.unlink(path)
-
-
-def test_download_ruleset(local_rules_path, ruleset_name):
-    try:
-        # Setup
-        os.makedirs(local_rules_path, exist_ok=True)
-
-        # Test
-        main.download_ruleset(
-            url="https://github.com/Yara-Rules/rules", name=ruleset_name, local_dir=local_rules_path
-        )
-        assert os.path.isfile(os.path.join(local_rules_path, ruleset_name, "README.md"))
-
-    finally:
-        # Cleanup
-        shutil.rmtree(local_rules_path, onerror=on_rm_error)
+class TestProcessRulesets:
+    def test_process_rulesets(self, full_config_file):
+        comp_config = CompendiumConfig(full_config_file)
+        files = process_rulesets(comp_config)
+        assert len(files) > 0
+        for f in files:
+            assert os.path.isfile(f)
